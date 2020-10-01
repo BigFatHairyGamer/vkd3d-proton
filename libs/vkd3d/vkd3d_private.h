@@ -1713,6 +1713,48 @@ HRESULT vkd3d_copy_image_ops_init(struct vkd3d_copy_image_ops *meta_copy_image_o
 void vkd3d_copy_image_ops_cleanup(struct vkd3d_copy_image_ops *meta_copy_image_ops,
         struct d3d12_device *device) DECLSPEC_HIDDEN;
 
+struct vkd3d_swapchain_pipeline_key
+{
+    VkPipelineBindPoint bind_point;
+    VkFormat format;
+    VkFilter filter;
+};
+
+struct vkd3d_swapchain_info
+{
+    VkDescriptorSetLayout vk_set_layout;
+    VkPipelineLayout vk_pipeline_layout;
+    VkRenderPass vk_render_pass;
+    VkPipeline vk_pipeline;
+};
+
+struct vkd3d_swapchain_pipeline
+{
+    struct vkd3d_swapchain_pipeline_key key;
+    VkRenderPass vk_render_pass;
+    VkPipeline vk_pipeline;
+};
+
+struct vkd3d_swapchain_ops
+{
+    VkDescriptorSetLayout vk_set_layouts[2];
+    VkPipelineLayout vk_pipeline_layouts[2];
+    VkShaderModule vk_vs_module;
+    VkShaderModule vk_fs_module;
+    VkSampler vk_samplers[2];
+
+    pthread_mutex_t mutex;
+
+    struct vkd3d_swapchain_pipeline *pipelines;
+    size_t pipelines_size;
+    size_t pipeline_count;
+};
+
+HRESULT vkd3d_swapchain_ops_init(struct vkd3d_swapchain_ops *meta_swapchain_ops,
+        struct d3d12_device *device) DECLSPEC_HIDDEN;
+void vkd3d_swapchain_ops_cleanup(struct vkd3d_swapchain_ops *meta_swapchain_ops,
+        struct d3d12_device *device) DECLSPEC_HIDDEN;
+
 struct vkd3d_meta_ops_common
 {
     VkShaderModule vk_module_fullscreen_vs;
@@ -1725,6 +1767,7 @@ struct vkd3d_meta_ops
     struct vkd3d_meta_ops_common common;
     struct vkd3d_clear_uav_ops clear_uav;
     struct vkd3d_copy_image_ops copy_image;
+    struct vkd3d_swapchain_ops swapchain;
 };
 
 HRESULT vkd3d_meta_ops_init(struct vkd3d_meta_ops *meta_ops, struct d3d12_device *device) DECLSPEC_HIDDEN;
@@ -1747,6 +1790,8 @@ HRESULT vkd3d_meta_get_copy_image_pipeline(struct vkd3d_meta_ops *meta_ops,
 VkImageViewType vkd3d_meta_get_copy_image_view_type(D3D12_RESOURCE_DIMENSION dim) DECLSPEC_HIDDEN;
 const struct vkd3d_format *vkd3d_meta_get_copy_image_attachment_format(struct vkd3d_meta_ops *meta_ops,
         const struct vkd3d_format *dst_format, const struct vkd3d_format *src_format) DECLSPEC_HIDDEN;
+HRESULT vkd3d_meta_get_swapchain_pipeline(struct vkd3d_meta_ops *meta_ops,
+        const struct vkd3d_swapchain_pipeline_key *key, struct vkd3d_swapchain_info *info) DECLSPEC_HIDDEN;
 
 enum vkd3d_time_domain_flag
 {
