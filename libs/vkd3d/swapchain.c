@@ -782,6 +782,7 @@ static BOOL d3d12_swapchain_has_user_images(struct d3d12_swapchain *swapchain)
 
 static HRESULT d3d12_swapchain_create_user_buffers(struct d3d12_swapchain *swapchain, VkFormat vk_format)
 {
+    VkImageMemoryBarrier image_memory_barriers[DXGI_MAX_SWAP_CHAIN_BUFFERS];
     D3D12_HEAP_PROPERTIES heap_properties;
     D3D12_RESOURCE_DESC resource_desc;
     struct d3d12_resource* object;
@@ -824,7 +825,29 @@ static HRESULT d3d12_swapchain_create_user_buffers(struct d3d12_swapchain *swapc
 
         vkd3d_resource_incref(swapchain->buffers[i]);
         ID3D12Resource_Release(swapchain->buffers[i]);
+
+        image_memory_barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        image_memory_barriers[i].pNext = NULL;
+        image_memory_barriers[i].dstAccessMask = 0;
+        image_memory_barriers[i].srcAccessMask = 0;
+        image_memory_barriers[i].image = swapchain->vk_images[i];
+        image_memory_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        image_memory_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        image_memory_barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        image_memory_barriers[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_memory_barriers[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        image_memory_barriers[i].subresourceRange.baseArrayLayer = 0;
+        image_memory_barriers[i].subresourceRange.baseMipLevel = 0;
+        image_memory_barriers[i].subresourceRange.layerCount = 1;
+        image_memory_barriers[i].subresourceRange.levelCount = 1;
     }
+
+    /* It is technically possible to just start presenting images without rendering to them.
+     * The initial resource state for swapchain images is PRESENT.
+     * Since presentable images are dedicated allocations, we can safely queue a transition into common state
+     * right away. We will also drain the queue when we release the images, so there is no risk of early delete. */
+    vkd3d_queue_initial_image_memory_barriers(d3d12_swapchain_queue_iface(swapchain),
+            swapchain->desc.BufferCount, image_memory_barriers);
 
     return S_OK;
 }
