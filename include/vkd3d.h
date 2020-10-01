@@ -170,6 +170,10 @@ uint32_t vkd3d_get_vk_queue_family_index(ID3D12CommandQueue *queue);
 VkQueue vkd3d_acquire_vk_queue(ID3D12CommandQueue *queue);
 void vkd3d_release_vk_queue(ID3D12CommandQueue *queue);
 
+void vkd3d_queue_initial_image_memory_barriers(ID3D12CommandQueue *queue,
+        uint32_t barrier_count,
+        const VkImageMemoryBarrier *barriers);
+
 HRESULT vkd3d_create_image_resource(ID3D12Device *device,
         const struct vkd3d_image_resource_create_info *create_info, ID3D12Resource **resource);
 ULONG vkd3d_resource_decref(ID3D12Resource *resource);

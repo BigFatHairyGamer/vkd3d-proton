@@ -7934,6 +7934,107 @@ cleanup:
     vkd3d_free(image_binds);
 }
 
+static void d3d12_command_queue_initial_image_barriers(struct d3d12_command_queue *queue,
+        VkCommandPool *pool, VkCommandBuffer *cmd, VkFence *fence,
+        const VkImageMemoryBarrier *barriers, uint32_t barrier_count)
+{
+    struct VkCommandBufferAllocateInfo allocate_info;
+    const struct vkd3d_vk_device_procs *vk_procs;
+    VkCommandPoolCreateInfo pool_create_info;
+    VkCommandBufferBeginInfo begin_info;
+    VkFenceCreateInfo fence_create_info;
+    VkSubmitInfo submit_info;
+    VkQueue vk_queue;
+    VkResult vr;
+
+    vk_procs = &queue->device->vk_procs;
+
+    if (*pool == VK_NULL_HANDLE)
+    {
+        pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pool_create_info.pNext = NULL;
+        pool_create_info.queueFamilyIndex = queue->vkd3d_queue->vk_family_index;
+        pool_create_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        if ((vr = VK_CALL(vkCreateCommandPool(queue->device->vk_device, &pool_create_info, NULL, pool))))
+        {
+            ERR("Failed to create command pool, vr %d.\n", vr);
+            return;
+        }
+
+        allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate_info.commandBufferCount = 1;
+        allocate_info.commandPool = *pool;
+        allocate_info.pNext = NULL;
+        if ((vr = VK_CALL(vkAllocateCommandBuffers(queue->device->vk_device, &allocate_info, cmd))))
+        {
+            ERR("Failed to allocate command buffers, vr %d.\n", vr);
+            return;
+        }
+    }
+
+    /* Could use timeline semaphore, but overkill in this use case.
+     * Allow one pending transition to be active at a time.
+     * Timeline semaphore would make more sense if we need to support N in-flight transition buffers. */
+    if (*fence)
+    {
+        if ((vr = VK_CALL(vkWaitForFences(queue->device->vk_device, 1, fence, VK_TRUE, UINT64_MAX))))
+        {
+            ERR("Failed to wait for fence, vr %d.\n", vr);
+            return;
+        }
+
+        if ((vr = VK_CALL(vkResetFences(queue->device->vk_device, 1, fence))))
+        {
+            ERR("Failed to reset fences, vr %d.\n", vr);
+            return;
+        }
+    }
+    else
+    {
+        fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fence_create_info.pNext = NULL;
+        fence_create_info.flags = 0;
+        if ((vr = VK_CALL(vkCreateFence(queue->device->vk_device, &fence_create_info, NULL, fence))))
+        {
+            ERR("Failed to create fence, vr %d.\n", vr);
+            return;
+        }
+    }
+
+    VK_CALL(vkResetCommandPool(queue->device->vk_device, *pool, 0));
+
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.pNext = NULL;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    begin_info.pInheritanceInfo = NULL;
+    VK_CALL(vkBeginCommandBuffer(*cmd, &begin_info));
+    VK_CALL(vkCmdPipelineBarrier(*cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            0, 0, NULL, 0, NULL, barrier_count, barriers));
+    VK_CALL(vkEndCommandBuffer(*cmd));
+
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = NULL;
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = NULL;
+    submit_info.pWaitDstStageMask = NULL;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = cmd;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores = NULL;
+
+    if (!(vk_queue = vkd3d_queue_acquire(queue->vkd3d_queue)))
+    {
+        ERR("Failed to acquire queue %p.\n", queue->vkd3d_queue);
+        return;
+    }
+
+    if ((vr = VK_CALL(vkQueueSubmit(vk_queue, 1, &submit_info, VK_NULL_HANDLE))))
+        ERR("Failed to submit barrier cmd.\n");
+
+    vkd3d_queue_release(queue->vkd3d_queue);
+}
+
 void d3d12_command_queue_submit_stop(struct d3d12_command_queue *queue)
 {
     struct d3d12_command_queue_submission sub;
@@ -7985,10 +8086,19 @@ static void *d3d12_command_queue_submission_worker_main(void *userdata)
 {
     struct d3d12_command_queue_submission submission;
     struct d3d12_command_queue *queue = userdata;
+    struct vkd3d_vk_device_procs *vk_procs;
+    VkCommandBuffer memory_barrier_cmd;
+    VkCommandPool memory_barrier_pool;
+    VkFence memory_barrier_fence;
     unsigned int i;
     VKD3D_REGION_DECL(queue_wait);
     VKD3D_REGION_DECL(queue_signal);
     VKD3D_REGION_DECL(queue_execute);
+
+    vk_procs = &queue->device->vk_procs;
+    memory_barrier_cmd = VK_NULL_HANDLE;
+    memory_barrier_pool = VK_NULL_HANDLE;
+    memory_barrier_fence = VK_NULL_HANDLE;
 
     vkd3d_set_thread_name("vkd3d_queue");
 
@@ -8006,7 +8116,7 @@ static void *d3d12_command_queue_submission_worker_main(void *userdata)
         switch (submission.type)
         {
         case VKD3D_SUBMISSION_STOP:
-            return NULL;
+            goto cleanup;
 
         case VKD3D_SUBMISSION_WAIT:
             VKD3D_REGION_BEGIN(queue_wait);
@@ -8038,6 +8148,17 @@ static void *d3d12_command_queue_submission_worker_main(void *userdata)
             vkd3d_free(submission.bind_sparse.bind_infos);
             break;
 
+        case VKD3D_SUBMISSION_INITIAL_IMAGE_BARRIER:
+        {
+            /* Somewhat naive implementation. We only expect to run this once every swapchain creation. */
+            d3d12_command_queue_initial_image_barriers(queue, &memory_barrier_pool,
+                    &memory_barrier_cmd, &memory_barrier_fence,
+                    submission.initial_image_barrier.barriers,
+                    submission.initial_image_barrier.barrier_count);
+            vkd3d_free(submission.initial_image_barrier.barriers);
+            break;
+        }
+
         case VKD3D_SUBMISSION_DRAIN:
         {
             pthread_mutex_lock(&queue->queue_lock);
@@ -8052,6 +8173,13 @@ static void *d3d12_command_queue_submission_worker_main(void *userdata)
             break;
         }
     }
+
+cleanup:
+    if (memory_barrier_fence != VK_NULL_HANDLE)
+        VK_CALL(vkWaitForFences(queue->device->vk_device, 1, &memory_barrier_fence, VK_TRUE, UINT64_MAX));
+    VK_CALL(vkDestroyFence(queue->device->vk_device, memory_barrier_fence, NULL));
+    VK_CALL(vkDestroyCommandPool(queue->device->vk_device, memory_barrier_pool, NULL));
+    return NULL;
 }
 
 static HRESULT d3d12_command_queue_init(struct d3d12_command_queue *queue,
@@ -8190,6 +8318,26 @@ void vkd3d_release_vk_queue(ID3D12CommandQueue *queue)
     struct d3d12_command_queue *d3d12_queue = impl_from_ID3D12CommandQueue(queue);
     vkd3d_queue_release(d3d12_queue->vkd3d_queue);
     d3d12_command_queue_release_serialized(d3d12_queue);
+}
+
+void vkd3d_queue_initial_image_memory_barriers(ID3D12CommandQueue *queue,
+        uint32_t barrier_count,
+        const VkImageMemoryBarrier *barriers)
+{
+    struct d3d12_command_queue_submission sub;
+    struct d3d12_command_queue *d3d12_queue = impl_from_ID3D12CommandQueue(queue);
+
+    sub.initial_image_barrier.barrier_count = barrier_count;
+    sub.initial_image_barrier.barriers = vkd3d_malloc(barrier_count * sizeof(*barriers));
+    if (!sub.initial_image_barrier.barriers)
+    {
+        ERR("Failed to allocate memroy for vkd3d_queue_initial_image_memory_barriers.\n");
+        return;
+    }
+
+    memcpy(sub.initial_image_barrier.barriers, barriers, barrier_count * sizeof(*barriers));
+    sub.type = VKD3D_SUBMISSION_INITIAL_IMAGE_BARRIER;
+    d3d12_command_queue_add_submission(d3d12_queue, &sub);
 }
 
 /* ID3D12CommandSignature */

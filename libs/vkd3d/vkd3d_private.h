@@ -1358,6 +1358,7 @@ enum vkd3d_submission_type
     VKD3D_SUBMISSION_SIGNAL,
     VKD3D_SUBMISSION_EXECUTE,
     VKD3D_SUBMISSION_BIND_SPARSE,
+    VKD3D_SUBMISSION_INITIAL_IMAGE_BARRIER,
     VKD3D_SUBMISSION_STOP,
     VKD3D_SUBMISSION_DRAIN
 };
@@ -1405,6 +1406,12 @@ struct d3d12_command_queue_submission_bind_sparse
     struct d3d12_resource *src_resource;
 };
 
+struct d3d12_command_queue_submission_initial_image_barrier
+{
+    VkImageMemoryBarrier *barriers;
+    uint32_t barrier_count;
+};
+
 struct d3d12_command_queue_submission
 {
     enum vkd3d_submission_type type;
@@ -1414,6 +1421,7 @@ struct d3d12_command_queue_submission
         struct d3d12_command_queue_submission_signal signal;
         struct d3d12_command_queue_submission_execute execute;
         struct d3d12_command_queue_submission_bind_sparse bind_sparse;
+        struct d3d12_command_queue_submission_initial_image_barrier initial_image_barrier;
     };
 };
 
