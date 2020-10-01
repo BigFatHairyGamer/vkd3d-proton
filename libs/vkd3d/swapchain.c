@@ -1021,23 +1021,21 @@ static void vk_cmd_image_barrier(const struct vkd3d_vk_device_procs *vk_procs, V
 }
 
 static VkResult d3d12_swapchain_record_swapchain_blit(struct d3d12_swapchain *swapchain,
-        VkCommandBuffer vk_cmd_buffer, VkImage vk_dst_image, VkImage vk_src_image)
+        VkCommandBuffer vk_cmd_buffer, unsigned int dst_index, unsigned int src_index)
 {
     const struct vkd3d_vk_device_procs *vk_procs = d3d12_swapchain_procs(swapchain);
     VkCommandBufferBeginInfo begin_info;
-    VkImageBlit blit;
-    VkFilter filter;
+    VkRenderPassBeginInfo rp_info;
+    VkClearValue clear_value;
+    VkViewport viewport;
+    VkRect2D scissor;
     VkResult vr;
 
-    if (swapchain->desc.Width != swapchain->vk_swapchain_width
-            || swapchain->desc.Height != swapchain->vk_swapchain_height)
-        filter = VK_FILTER_LINEAR;
-    else
-        filter = VK_FILTER_NEAREST;
+    memset(&clear_value, 0, sizeof(clear_value));
 
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.pNext = NULL;
-    begin_info.flags = 0;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     begin_info.pInheritanceInfo = NULL;
 
     if ((vr = vk_procs->vkBeginCommandBuffer(vk_cmd_buffer, &begin_info)) < 0)
@@ -1046,52 +1044,53 @@ static VkResult d3d12_swapchain_record_swapchain_blit(struct d3d12_swapchain *sw
         return vr;
     }
 
-    vk_cmd_image_barrier(vk_procs, vk_cmd_buffer,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0, VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk_dst_image);
+    rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp_info.pNext = NULL;
+    rp_info.renderPass = swapchain->pipeline.vk_render_pass;
+    rp_info.renderArea.offset.x = 0;
+    rp_info.renderArea.offset.y = 0;
+    rp_info.clearValueCount = 1;
+    rp_info.pClearValues = &clear_value;
+    rp_info.framebuffer = swapchain->vk_framebuffers[dst_index];
 
-    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    blit.srcSubresource.mipLevel = 0;
-    blit.srcSubresource.baseArrayLayer = 0;
-    blit.srcSubresource.layerCount = 1;
-    blit.srcOffsets[0].x = 0;
-    blit.srcOffsets[0].y = 0;
-    blit.srcOffsets[0].z = 0;
-    blit.srcOffsets[1].x = swapchain->desc.Width;
-    blit.srcOffsets[1].y = swapchain->desc.Height;
-    blit.srcOffsets[1].z = 1;
-    blit.dstSubresource = blit.srcSubresource;
-    blit.dstOffsets[0].x = 0;
-    blit.dstOffsets[0].y = 0;
-    blit.dstOffsets[0].z = 0;
     if (swapchain->desc.Scaling == DXGI_SCALING_NONE)
     {
-        blit.srcOffsets[1].x = min((int)swapchain->vk_swapchain_width, blit.srcOffsets[1].x);
-        blit.srcOffsets[1].y = min((int)swapchain->vk_swapchain_height, blit.srcOffsets[1].y);
-        blit.dstOffsets[1].x = blit.srcOffsets[1].x;
-        blit.dstOffsets[1].y = blit.srcOffsets[1].y;
+        rp_info.renderArea.extent.width = min((int)swapchain->vk_swapchain_width, swapchain->desc.Width);
+        rp_info.renderArea.extent.height = min((int)swapchain->vk_swapchain_height, swapchain->desc.Height);
     }
     else
     {
         /* FIXME: handle DXGI_SCALING_ASPECT_RATIO_STRETCH. */
-        blit.dstOffsets[1].x = swapchain->vk_swapchain_width;
-        blit.dstOffsets[1].y = swapchain->vk_swapchain_height;
+        rp_info.renderArea.extent.width = swapchain->vk_swapchain_width;
+        rp_info.renderArea.extent.height = swapchain->vk_swapchain_height;
     }
-    blit.dstOffsets[1].z = 1;
 
-    /* FIXME: Move to a proper graphics pipeline here
-     * to avoid validation errors...
-     */
-    vk_procs->vkCmdBlitImage(vk_cmd_buffer,
-            vk_src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            vk_dst_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1, &blit, filter);
+    viewport.x = viewport.y = 0.0f;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    scissor = rp_info.renderArea;
 
-    vk_cmd_image_barrier(vk_procs, vk_cmd_buffer,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-            VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, vk_dst_image);
+    VK_CALL(vkCmdBeginRenderPass(vk_cmd_buffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE));
+    if (swapchain->desc.Scaling == DXGI_SCALING_NONE)
+    {
+        viewport.width = (float)swapchain->desc.Width;
+        viewport.height = (float)swapchain->desc.Height;
+    }
+    else
+    {
+        viewport.width = (float)rp_info.renderArea.extent.width;
+        viewport.height = (float)rp_info.renderArea.extent.height;
+    }
+
+    VK_CALL(vkCmdSetViewport(vk_cmd_buffer, 0, 1, &viewport));
+    VK_CALL(vkCmdSetScissor(vk_cmd_buffer, 0, 1, &scissor));
+
+    VK_CALL(vkCmdBindPipeline(vk_cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, swapchain->pipeline.vk_pipeline));
+    VK_CALL(vkCmdBindDescriptorSets(vk_cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            swapchain->pipeline.vk_pipeline_layout, 0, 1, &swapchain->descriptors.sets[src_index],
+            0, NULL));
+    VK_CALL(vkCmdDraw(vk_cmd_buffer, 3, 1, 0, 0));
+    VK_CALL(vkCmdEndRenderPass(vk_cmd_buffer));
 
     if ((vr = vk_procs->vkEndCommandBuffer(vk_cmd_buffer)) < 0)
         WARN("Failed to end command buffer, vr %d.\n", vr);
@@ -1426,11 +1425,21 @@ static HRESULT d3d12_swapchain_create_vulkan_swapchain(struct d3d12_swapchain *s
         return DXGI_ERROR_UNSUPPORTED;
     }
 
-    usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    usage |= surface_caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    usage |= surface_caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (!(usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) || !(usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT))
-        WARN("Transfer not supported for swapchain images.\n");
+    if (swapchain->command_queue->desc.Type == D3D12_COMMAND_LIST_TYPE_DIRECT)
+        usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    else if (swapchain->command_queue->desc.Type == D3D12_COMMAND_LIST_TYPE_COMPUTE)
+        usage = VK_IMAGE_USAGE_STORAGE_BIT;
+    else
+    {
+        FIXME("Unsupported queue type.\n");
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+
+    if ((usage & surface_caps.supportedUsageFlags) != usage)
+    {
+        FIXME("Require usage flags not supported.\n");
+        return DXGI_ERROR_UNSUPPORTED;
+    }
 
     vk_swapchain_desc.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     vk_swapchain_desc.pNext = NULL;
@@ -1684,8 +1693,6 @@ static VkResult d3d12_swapchain_queue_present(struct d3d12_swapchain *swapchain,
     VkCommandBuffer vk_cmd_buffer;
     VkPresentInfoKHR present_info;
     VkSubmitInfo submit_info;
-    VkImage vk_dst_image;
-    VkImage vk_src_image;
     VkResult vr;
 
     if (swapchain->vk_image_index == INVALID_VK_IMAGE_INDEX)
@@ -1705,10 +1712,7 @@ static VkResult d3d12_swapchain_queue_present(struct d3d12_swapchain *swapchain,
     present_info.pImageIndices = &swapchain->vk_image_index;
     present_info.pResults = NULL;
 
-    /* blit. TODO: Use graphics / compute pipelines instead. */
     vk_cmd_buffer = swapchain->vk_cmd_buffers[swapchain->vk_image_index];
-    vk_dst_image = swapchain->vk_swapchain_images[swapchain->vk_image_index];
-    vk_src_image = swapchain->vk_images[swapchain->current_buffer_index];
 
     if ((vr = vk_procs->vkResetCommandBuffer(vk_cmd_buffer, 0)) < 0)
     {
@@ -1717,7 +1721,7 @@ static VkResult d3d12_swapchain_queue_present(struct d3d12_swapchain *swapchain,
     }
 
     if ((vr = d3d12_swapchain_record_swapchain_blit(swapchain,
-            vk_cmd_buffer, vk_dst_image, vk_src_image)) < 0 )
+            vk_cmd_buffer, swapchain->vk_image_index, swapchain->current_buffer_index)) < 0)
         return vr;
 
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
