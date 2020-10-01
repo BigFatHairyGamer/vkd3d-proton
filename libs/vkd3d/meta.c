@@ -53,6 +53,32 @@ static VkResult vkd3d_meta_create_descriptor_set_layout(struct d3d12_device *dev
     return VK_CALL(vkCreateDescriptorSetLayout(device->vk_device, &set_layout_info, NULL, set_layout));
 }
 
+static VkResult vkd3d_meta_create_sampler(struct d3d12_device *device, VkFilter filter, VkSampler *vk_sampler)
+{
+    const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+    VkSamplerCreateInfo sampler_info;
+
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.pNext = NULL;
+    sampler_info.flags = 0;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler_info.anisotropyEnable = VK_FALSE;
+    sampler_info.maxAnisotropy = 1.0f;
+    sampler_info.compareEnable = VK_FALSE;
+    sampler_info.compareOp = VK_COMPARE_OP_ALWAYS;
+    sampler_info.unnormalizedCoordinates = VK_FALSE;
+    sampler_info.minLod = 0.0f;
+    sampler_info.maxLod = VK_LOD_CLAMP_NONE;
+    sampler_info.minFilter = filter;
+    sampler_info.magFilter = filter;
+    sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    sampler_info.mipLodBias = 0.0f;
+    return VK_CALL(vkCreateSampler(device->vk_device, &sampler_info, NULL, vk_sampler));
+}
+
 static VkResult vkd3d_meta_create_pipeline_layout(struct d3d12_device *device,
         uint32_t set_layout_count, const VkDescriptorSetLayout *set_layouts,
         uint32_t push_constant_range_count, const VkPushConstantRange *push_constant_ranges,
