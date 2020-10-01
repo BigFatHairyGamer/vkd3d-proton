@@ -4796,19 +4796,7 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetPipelineState(d3d12_command_
 
 static VkImageLayout vk_image_layout_from_d3d12_resource_state(const struct d3d12_resource *resource, D3D12_RESOURCE_STATES state)
 {
-    if (state != D3D12_RESOURCE_STATE_PRESENT)
-        return resource->common_layout;
-
-    switch (resource->present_state)
-    {
-        case D3D12_RESOURCE_STATE_PRESENT:
-            return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        case D3D12_RESOURCE_STATE_COPY_SOURCE:
-            return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        default:
-            FIXME("Unhandled present state %u.\n", resource->present_state);
-            return resource->common_layout;
-    }
+    return resource->common_layout;
 }
 
 static bool vk_image_memory_barrier_from_d3d12_transition(const struct d3d12_device *device,
@@ -4889,12 +4877,6 @@ static bool d3d12_resource_may_alias_other_resources(struct d3d12_resource *reso
     if (resource->flags & VKD3D_RESOURCE_DEDICATED_HEAP)
         return false;
 
-    /* Cannot alias if the resource is a swapchain image.
-     * This is also important since we cannot reason about a default
-     * image layout for presentable images like we can other resources. */
-    if (d3d12_resource_is_texture(resource) && (resource->flags & VKD3D_RESOURCE_PRESENT_STATE_TRANSITION))
-        return false;
-
     return true;
 }
 
@@ -4959,23 +4941,12 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(d3d12_command_l
                     continue;
                 }
 
-                if (resource->flags & VKD3D_RESOURCE_PRESENT_STATE_TRANSITION &&
-                        vk_image_memory_barrier_from_d3d12_transition(list->device, resource, transition,
-                                 list->vk_queue_flags, &vk_image_barrier, &src_image_stage_mask, &dst_image_stage_mask))
-                {
-                    VK_CALL(vkCmdPipelineBarrier(list->vk_command_buffer,
-                            src_image_stage_mask, dst_image_stage_mask, 0,
-                            0, NULL, 0, NULL, 1, &vk_image_barrier));
-                }
-                else
-                {
-                    vk_access_and_stage_flags_from_d3d12_resource_state(list->device, resource,
-                            transition->StateBefore, list->vk_queue_flags, &src_stage_mask,
-                            &vk_memory_barrier.srcAccessMask);
-                    vk_access_and_stage_flags_from_d3d12_resource_state(list->device, resource,
-                            transition->StateAfter, list->vk_queue_flags, &dst_stage_mask,
-                            &vk_memory_barrier.dstAccessMask);
-                }
+                vk_access_and_stage_flags_from_d3d12_resource_state(list->device, resource,
+                        transition->StateBefore, list->vk_queue_flags, &src_stage_mask,
+                        &vk_memory_barrier.srcAccessMask);
+                vk_access_and_stage_flags_from_d3d12_resource_state(list->device, resource,
+                        transition->StateAfter, list->vk_queue_flags, &dst_stage_mask,
+                        &vk_memory_barrier.dstAccessMask);
 
                 TRACE("Transition barrier (resource %p, subresource %#x, before %#x, after %#x).\n",
                         resource, transition->Subresource, transition->StateBefore, transition->StateAfter);

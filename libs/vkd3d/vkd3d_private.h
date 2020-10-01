@@ -503,7 +503,6 @@ struct d3d12_resource
 
     VkImageLayout common_layout;
     D3D12_RESOURCE_STATES initial_state;
-    D3D12_RESOURCE_STATES present_state;
 
     struct d3d12_sparse_info sparse;
     struct vkd3d_view_map view_map;

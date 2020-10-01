@@ -134,6 +134,9 @@ struct vkd3d_optional_device_extensions_info
 
 /* vkd3d_image_resource_create_info flags */
 #define VKD3D_RESOURCE_INITIAL_STATE_TRANSITION 0x00000001
+
+/* Obsolete and unsupported. Cannot function properly with D3D12.
+ * Will error out in resource creation if used. */
 #define VKD3D_RESOURCE_PRESENT_STATE_TRANSITION 0x00000002
 
 struct vkd3d_image_resource_create_info
@@ -144,6 +147,7 @@ struct vkd3d_image_resource_create_info
     VkImage vk_image;
     D3D12_RESOURCE_DESC desc;
     unsigned int flags;
+    /* Obsolete and unsupported. Cannot function properly with D3D12. */
     D3D12_RESOURCE_STATES present_state;
 };
 
